@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -102,7 +101,19 @@ export function useAudioRecorder(): UseAudioRecorderResult {
 
       recorder.start();
     } catch (err) {
-      console.error(`Error accessing ${currentSourceType}:`, err);
+      let isPermissionsPolicyError = false;
+      if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+        if (err.message.toLowerCase().includes('disallowed by permissions policy') || err.message.toLowerCase().includes('permission denied by system')) {
+          isPermissionsPolicyError = true;
+        }
+      }
+
+      if (isPermissionsPolicyError) {
+        console.warn(`Screen capture permission issue for ${currentSourceType}. This is often an environment or browser configuration issue. Error details:`, err.message);
+      } else {
+        console.error(`Error accessing ${currentSourceType}:`, err);
+      }
+      
       if (err instanceof DOMException) {
         let userFriendlyMessage = `Error accessing ${currentSourceType}: ${err.message}.`;
         if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
@@ -113,6 +124,8 @@ export function useAudioRecorder(): UseAudioRecorderResult {
           }
         } else if (err.name === 'NotFoundError') {
           userFriendlyMessage = `Could not start ${currentSourceType}. No source selected or available, or required hardware is missing.`;
+        } else if (err.name === 'AbortError') {
+            userFriendlyMessage = `The ${currentSourceType} request was aborted, likely by the user dismissing the picker.`;
         }
         setError(userFriendlyMessage);
       } else if (err instanceof Error) { // Fallback for other generic errors
@@ -129,9 +142,9 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       }
       // Check if mediaStream was set and is different from originalDisplayStreamRef before trying to stop its tracks
       // This check avoids errors if setMediaStream(null) was called before this cleanup
-      const currentMediaStream = mediaStreamRef.current; // Use a ref to get the latest mediaStream state for cleanup
-      if (currentMediaStream && currentMediaStream !== originalDisplayStreamRef.current) {
-        currentMediaStream.getTracks().forEach(track => track.stop());
+      const currentMediaStreamState = mediaStreamRef.current; // Use a ref to get the latest mediaStream state for cleanup
+      if (currentMediaStreamState && currentMediaStreamState !== originalDisplayStreamRef.current) {
+        currentMediaStreamState.getTracks().forEach(track => track.stop());
         setMediaStream(null);
       }
     }
