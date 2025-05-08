@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -102,20 +103,46 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       recorder.start();
     } catch (err) {
       console.error(`Error accessing ${currentSourceType}:`, err);
-      if (err instanceof Error) {
+      if (err instanceof DOMException) {
         let userFriendlyMessage = `Error accessing ${currentSourceType}: ${err.message}.`;
-        if (err.name === 'NotAllowedError') {
-          userFriendlyMessage += ` Please ensure ${currentSourceType} access is granted.`;
-        } else if (err.name === 'NotFoundError' && currentSourceType === 'display') {
-           userFriendlyMessage = "Could not start screen share. No source selected or available.";
+        if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+          if (err.message.toLowerCase().includes('disallowed by permissions policy') || err.message.toLowerCase().includes('permission denied by system')) {
+            userFriendlyMessage = `Access to screen capture (display-capture) is disallowed. This might be due to browser settings, system permissions (e.g., on macOS, screen recording permission for the browser), or if the app is in an iframe without 'allow="display-capture"'. Please check your browser/system permissions and ensure the feature is enabled.`;
+          } else { // General permission denied by user
+            userFriendlyMessage = `Access to ${currentSourceType} was denied. Please grant permission when prompted.`;
+          }
+        } else if (err.name === 'NotFoundError') {
+          userFriendlyMessage = `Could not start ${currentSourceType}. No source selected or available, or required hardware is missing.`;
         }
         setError(userFriendlyMessage);
-      } else {
+      } else if (err instanceof Error) { // Fallback for other generic errors
+        setError(`Error accessing ${currentSourceType}: ${err.message}.`);
+      }
+      else {
         setError(`An unknown error occurred while accessing the ${currentSourceType}.`);
       }
       setStatus("idle");
+      // Clean up any partial streams if they were created
+      if (originalDisplayStreamRef.current) {
+        originalDisplayStreamRef.current.getTracks().forEach(track => track.stop());
+        originalDisplayStreamRef.current = null;
+      }
+      // Check if mediaStream was set and is different from originalDisplayStreamRef before trying to stop its tracks
+      // This check avoids errors if setMediaStream(null) was called before this cleanup
+      const currentMediaStream = mediaStreamRef.current; // Use a ref to get the latest mediaStream state for cleanup
+      if (currentMediaStream && currentMediaStream !== originalDisplayStreamRef.current) {
+        currentMediaStream.getTracks().forEach(track => track.stop());
+        setMediaStream(null);
+      }
     }
   }, [status, audioUrl]);
+
+  // Use a ref for mediaStream to access its latest value in the catch block's cleanup
+  const mediaStreamRef = useRef(mediaStream);
+  useEffect(() => {
+    mediaStreamRef.current = mediaStream;
+  }, [mediaStream]);
+
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
@@ -132,9 +159,9 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       URL.revokeObjectURL(audioUrl);
     }
     // Stop tracks of the stream used for recording
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(track => track.stop());
-      setMediaStream(null);
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      setMediaStream(null); // This will also update mediaStreamRef.current via useEffect
     }
     // If there was an original display stream, ensure all its tracks are stopped too
     if (originalDisplayStreamRef.current) {
@@ -148,7 +175,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
     setError(null);
     audioChunksRef.current = [];
     mediaRecorderRef.current = null;
-  }, [audioUrl, mediaStream]);
+  }, [audioUrl]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -156,8 +183,8 @@ export function useAudioRecorder(): UseAudioRecorderResult {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
         mediaRecorderRef.current.stop();
       }
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
+      if (mediaStreamRef.current) { // Use ref for cleanup
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
       }
       if (originalDisplayStreamRef.current) {
         originalDisplayStreamRef.current.getTracks().forEach(track => track.stop());
@@ -166,7 +193,7 @@ export function useAudioRecorder(): UseAudioRecorderResult {
         URL.revokeObjectURL(audioUrl);
       }
     };
-  }, [mediaStream, audioUrl]); // mediaStream and audioUrl are dependencies
+  }, [audioUrl]); // audioUrl is a dependency for its own cleanup
 
   return { audioBlob, audioUrl, status, startRecording, stopRecording, resetRecording, error, mediaStream };
 }
