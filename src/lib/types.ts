@@ -30,3 +30,5 @@ export interface StoredInterviewSession {
 }
 
 export type AudioStatus = "idle" | "recording" | "processing" | "stopped";
+
+export type AudioSourceType = 'microphone' | 'display';

@@ -1,10 +1,18 @@
 "use client";
 
 import { Button } from '@/components/ui/button';
-import { Mic, StopCircle, RotateCcw, AlertTriangle, Loader2 } from 'lucide-react';
-import type { AudioStatus } from '@/lib/types';
+import { Mic, StopCircle, RotateCcw, AlertTriangle, Loader2, MonitorPlay } from 'lucide-react';
+import type { AudioStatus, AudioSourceType } from '@/lib/types'; // Assuming AudioSourceType is in lib/types
 import { Progress } from '@/components/ui/progress';
 import { useEffect, useState } from 'react';
+
+interface AudioControlLabels {
+  start?: string;
+  recording?: string;
+  stop?: string;
+  reset?: string;
+  processingAi?: string;
+}
 
 interface AudioControlsProps {
   status: AudioStatus;
@@ -14,10 +22,31 @@ interface AudioControlsProps {
   disabled?: boolean;
   error?: string | null;
   isProcessingAi?: boolean;
+  sourceType?: AudioSourceType; // To select icon
+  labels?: AudioControlLabels;
 }
 
-export function AudioControls({ status, onStart, onStop, onReset, disabled, error, isProcessingAi = false }: AudioControlsProps) {
+const defaultLabels: Required<AudioControlLabels> = {
+  start: 'Start Recording',
+  recording: 'Recording',
+  stop: 'Stop',
+  reset: 'Reset recording',
+  processingAi: 'AI is processing...',
+};
+
+export function AudioControls({ 
+  status, 
+  onStart, 
+  onStop, 
+  onReset, 
+  disabled, 
+  error, 
+  isProcessingAi = false,
+  sourceType = 'microphone',
+  labels: customLabels 
+}: AudioControlsProps) {
   const [recordingTime, setRecordingTime] = useState(0);
+  const labels = { ...defaultLabels, ...customLabels };
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -37,6 +66,7 @@ export function AudioControls({ status, onStart, onStop, onReset, disabled, erro
   };
   
   const effectiveDisabled = disabled || isProcessingAi;
+  const StartIcon = sourceType === 'display' ? MonitorPlay : Mic;
 
   return (
     <div className="space-y-3 p-4 border rounded-lg shadow bg-card">
@@ -47,10 +77,10 @@ export function AudioControls({ status, onStart, onStop, onReset, disabled, erro
           variant="outline"
           size="lg"
           className="group transition-all hover:bg-green-500/10 hover:border-green-500 hover:text-green-600 disabled:opacity-60"
-          aria-label="Start recording"
+          aria-label={labels.start}
         >
-          <Mic className={`w-6 h-6 mr-2 ${status === 'recording' ? 'text-red-500 animate-pulse' : 'text-green-600 group-hover:text-green-500'}`} />
-          {status === 'recording' ? `Recording (${formatTime(recordingTime)})` : 'Start Recording'}
+          <StartIcon className={`w-6 h-6 mr-2 ${status === 'recording' ? 'text-red-500 animate-pulse' : 'text-green-600 group-hover:text-green-500'}`} />
+          {status === 'recording' ? `${labels.recording} (${formatTime(recordingTime)})` : labels.start}
         </Button>
         <Button
           onClick={onStop}
@@ -58,10 +88,10 @@ export function AudioControls({ status, onStart, onStop, onReset, disabled, erro
           variant="destructive"
           size="lg"
           className="group transition-all hover:bg-red-600/90 disabled:opacity-60"
-          aria-label="Stop recording"
+          aria-label={labels.stop}
         >
           <StopCircle className="w-6 h-6 mr-2" />
-          Stop
+          {labels.stop}
         </Button>
         {onReset && (
           <Button
@@ -70,7 +100,7 @@ export function AudioControls({ status, onStart, onStop, onReset, disabled, erro
             variant="ghost"
             size="icon"
             className="text-muted-foreground hover:text-primary disabled:opacity-60"
-            aria-label="Reset recording"
+            aria-label={labels.reset}
           >
             <RotateCcw className="w-5 h-5" />
           </Button>
@@ -92,7 +122,7 @@ export function AudioControls({ status, onStart, onStop, onReset, disabled, erro
       {isProcessingAi && status !== 'recording' && (
          <div className="flex items-center justify-center text-primary text-sm p-2 bg-primary/10 rounded-md">
           <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-          <span>AI is processing your response...</span>
+          <span>{labels.processingAi}</span>
         </div>
       )}
       <style jsx>{`
