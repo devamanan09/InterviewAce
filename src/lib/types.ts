@@ -6,7 +6,7 @@ export interface TranscriptItem {
 
 export interface AISuggestion {
   suggestion: string;
-  improvementAreas?: string;
+  rationale?: string; // Changed from improvementAreas
 }
 
 export interface InterviewQuestion {
@@ -25,7 +25,7 @@ export interface StoredInterviewSession {
   date: string; // ISO string
   roleDescription?: string; // For practice mode
   transcript: TranscriptItem[]; // Main conversation log
-  userSpokenResponses?: TranscriptItem[]; // For live mode, automatically recorded user speech
+  // userSpokenResponses removed as live mode is simplified
   summary?: string; // AI summary of the session
   overallFeedback?: string; // AI feedback
 }

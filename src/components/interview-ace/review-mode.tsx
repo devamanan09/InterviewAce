@@ -22,8 +22,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from '@/components/ui/badge';
 
-// Placeholder for UserVoice if not in lucide-react, replace with a suitable one or SVG
-const UserVoiceIcon = UserCheck; // Using UserCheck as a placeholder
+const UserVoiceIcon = UserCheck; 
 
 export function ReviewMode() {
   const [sessions, setSessions] = useState<StoredInterviewSession[]>([]);
@@ -41,8 +40,8 @@ export function ReviewMode() {
 
   const handleDeleteSession = (sessionId: string) => {
     deleteSessionFromLocalStorage(sessionId);
-    loadSessions(); // Refresh the list
-    setSelectedSession(null); // Deselect if it was selected
+    loadSessions(); 
+    setSelectedSession(null); 
     toast({ title: "Session Deleted", description: "The interview session has been removed.", variant: "default" });
   };
 
@@ -66,7 +65,6 @@ export function ReviewMode() {
 
   return (
     <div className="grid md:grid-cols-3 gap-6">
-      {/* Sessions List */}
       <Card className="md:col-span-1 shadow-lg h-fit sticky top-24">
         <CardHeader>
           <CardTitle className="text-xl flex items-center"><History className="w-6 h-6 mr-2 text-primary" /> Saved Sessions</CardTitle>
@@ -100,7 +98,6 @@ export function ReviewMode() {
         </CardContent>
       </Card>
 
-      {/* Session Details */}
       <div className="md:col-span-2">
         {selectedSession ? (
           <Card className="shadow-xl">
@@ -141,7 +138,7 @@ export function ReviewMode() {
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              <Accordion type="multiple" defaultValue={['transcript', 'summary', 'userResponses']} className="w-full">
+              <Accordion type="multiple" defaultValue={['transcript', 'summary']} className="w-full">
                 <AccordionItem value="transcript">
                   <AccordionTrigger className="text-lg font-semibold hover:no-underline">
                     <FileText className="w-5 h-5 mr-2 text-primary"/> Main Conversation Transcript
@@ -150,7 +147,12 @@ export function ReviewMode() {
                     <ChatLog messages={selectedSession.transcript} height="300px" />
                   </AccordionContent>
                 </AccordionItem>
-
+                
+                {/* userSpokenResponses is no longer a primary feature of live mode, so this section may not be relevant
+                    or will only show for older sessions if the type still allows it.
+                    For new simplified live sessions, this won't be populated.
+                */}
+                {/* 
                 {selectedSession.userSpokenResponses && selectedSession.userSpokenResponses.length > 0 && (
                   <AccordionItem value="userResponses">
                     <AccordionTrigger className="text-lg font-semibold hover:no-underline">
@@ -161,6 +163,7 @@ export function ReviewMode() {
                     </AccordionContent>
                   </AccordionItem>
                 )}
+                */}
                 
                 {(selectedSession.summary || selectedSession.overallFeedback) && (
                   <AccordionItem value="summary">

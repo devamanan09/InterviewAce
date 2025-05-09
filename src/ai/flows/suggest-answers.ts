@@ -1,10 +1,9 @@
-// 'use server'
 'use server';
 
 /**
- * @fileOverview This file defines a Genkit flow for suggesting answers and improvements during a live interview.
+ * @fileOverview This file defines a Genkit flow for suggesting answers during a live interview based on the interviewer's question.
  *
- * - suggestAnswers - A function that takes interviewer question and user response, and returns AI-powered answer suggestions and improvements.
+ * - suggestAnswers - A function that takes an interviewer question and returns an AI-powered answer suggestion and rationale.
  * - SuggestAnswersInput - The input type for the suggestAnswers function.
  * - SuggestAnswersOutput - The return type for the suggestAnswers function.
  */
@@ -14,13 +13,12 @@ import {z} from 'genkit';
 
 const SuggestAnswersInputSchema = z.object({
   interviewerQuestion: z.string().describe('The question asked by the interviewer.'),
-  userResponse: z.string().describe('The user\'s response to the interviewer question.'),
 });
 export type SuggestAnswersInput = z.infer<typeof SuggestAnswersInputSchema>;
 
 const SuggestAnswersOutputSchema = z.object({
-  suggestedAnswer: z.string().describe('An AI-suggested answer to the interviewer question.'),
-  improvements: z.string().describe('Suggestions for improving the user\'s response.'),
+  suggestedAnswer: z.string().describe('An AI-suggested answer for the job seeker to use in response to the interviewer question.'),
+  rationale: z.string().describe('A brief explanation of why the suggested answer is effective or key points it covers.'),
 });
 export type SuggestAnswersOutput = z.infer<typeof SuggestAnswersOutputSchema>;
 
@@ -32,15 +30,15 @@ const prompt = ai.definePrompt({
   name: 'suggestAnswersPrompt',
   input: {schema: SuggestAnswersInputSchema},
   output: {schema: SuggestAnswersOutputSchema},
-  prompt: `You are an AI-powered interview coach. Your task is to provide helpful suggestions to the user during a live interview.
+  prompt: `You are an AI-powered interview coach. An interviewer has asked the following question. Your task is to generate a strong, concise, and effective answer that a job seeker could use in response to this question. Also, provide a brief explanation of why this answer is effective or what key points it covers.
 
-  Based on the interviewer's question and the user's response, generate a suggested answer and provide specific improvements to the user's response.
+Interviewer Question: {{{interviewerQuestion}}}
 
-  Interviewer Question: {{{interviewerQuestion}}}
-  User Response: {{{userResponse}}}
+Suggested Answer for the Job Seeker:
+[Provide a well-crafted answer here]
 
-  Suggested Answer:
-  Improvements:
+Key Points / Rationale:
+[Explain briefly why the suggested answer is good or what it highlights]
   `,
 });
 
