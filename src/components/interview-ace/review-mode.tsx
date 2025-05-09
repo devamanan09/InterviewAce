@@ -8,7 +8,7 @@ import { ChatLog } from './chat-log';
 import type { StoredInterviewSession } from '@/lib/types';
 import { getSessionsFromLocalStorage, deleteSessionFromLocalStorage } from '@/lib/local-storage';
 import { useToast } from '@/hooks/use-toast';
-import { History, Trash2, FileText, Brain, UserVoice } from 'lucide-react'; // Assuming UserVoice or similar icon
+import { History, Trash2, FileText, Brain, UserCheck } from 'lucide-react'; 
 import {
   AlertDialog,
   AlertDialogAction,
