@@ -9,13 +9,14 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { AudioControls } from './audio-controls';
 import { SuggestionCard } from './suggestion-card';
 import { ChatLog } from './chat-log';
-import { useAudioRecorder, type UseAudioRecorderResult, type AudioSourceType } from '@/hooks/useAudioRecorder';
+import { useAudioRecorder, type AudioSourceType } from '@/hooks/useAudioRecorder';
+import { useLiveInterviewerTranscriber } from '@/hooks/useLiveInterviewerTranscriber';
 import { transcribeAudio, type SpeechRecognitionResult } from '@/services/speech-recognition';
 import { suggestAnswers, type SuggestAnswersOutput } from '@/ai/flows/suggest-answers';
 import { summarizeInterview, type SummarizeInterviewOutput } from '@/ai/flows/summarize-interview';
 import type { TranscriptItem, AISuggestion, StoredInterviewSession } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
-import { Mic, Send, Bot, Save, RotateCcw, MessageCircle, MonitorPlay, Info } from 'lucide-react';
+import { Mic, Send, Bot, Save, RotateCcw, MessageCircle, MonitorPlay, Info, StopCircle as StopCircleLucide, Loader2 } from 'lucide-react';
 import { saveSessionToLocalStorage } from '@/lib/local-storage';
 import { v4 as uuidv4 } from 'uuid';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -28,22 +29,40 @@ export function LiveMode() {
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const [currentSuggestion, setCurrentSuggestion] = useState<AISuggestion | null>(null);
   const [isProcessingUserResponse, setIsProcessingUserResponse] = useState<boolean>(false);
-  const [isProcessingInterviewerAudio, setIsProcessingInterviewerAudio] = useState<boolean>(false);
   const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
   const [sessionSummary, setSessionSummary] = useState<SummarizeInterviewOutput | null>(null);
   const [interviewerInputMethod, setInterviewerInputMethod] = useState<InterviewerInputMethod>('manual');
 
   const userResponseRecorder = useAudioRecorder();
-  const interviewerAudioRecorder = useAudioRecorder();
   const { toast } = useToast();
   const lastProcessedQuestionRef = useRef<string | null>(null);
+  const aiTriggerTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const AI_TRIGGER_PAUSE_DURATION_MS = 2500; // Pause duration before triggering AI for interviewer's question
+
 
   const addMessageToTranscript = useCallback((speaker: TranscriptItem['speaker'], text: string) => {
+    if (!text.trim()) return; // Do not add empty messages
     setTranscript(prev => [...prev, { speaker, text, timestamp: Date.now() }]);
     if (speaker === 'interviewer') {
       lastProcessedQuestionRef.current = text;
     }
   }, []);
+
+  const interviewerTranscriber = useLiveInterviewerTranscriber(
+    // onFinalSegmentCallback: This is called when the transcriber gets a final piece of text
+    (finalSegment) => {
+      addMessageToTranscript('interviewer', finalSegment);
+      // The AI trigger logic is now primarily in the useEffect watching `interviewerTranscriber.finalTranscriptSegment`
+    }
+  );
+
+  useEffect(() => {
+    // Clear user's response text and reset recorder if input method changes
+    // or if interviewer starts/stops listening, to avoid stale user input.
+    setUserResponseText(''); 
+    userResponseRecorder.resetRecording();
+  }, [interviewerInputMethod, interviewerTranscriber.isListening, userResponseRecorder]);
+
 
   const handleManualInterviewerQuestionSubmit = async () => {
     if (!interviewerQuestionManual.trim()) {
@@ -51,41 +70,62 @@ export function LiveMode() {
       return;
     }
     addMessageToTranscript('interviewer', interviewerQuestionManual);
+    await triggerAISuggestionForInterviewerQuestion(interviewerQuestionManual);
     setInterviewerQuestionManual(''); 
   };
+  
+  const triggerAISuggestionForInterviewerQuestion = async (questionText: string) => {
+    if (!questionText.trim()) return;
 
-  const processUserResponse = async (responseText: string) => {
-    if (!responseText.trim()) return;
-    
-    const lastQuestion = lastProcessedQuestionRef.current;
-
-    if (!lastQuestion) {
-      toast({ title: "No Question Context", description: "Please ensure an interviewer question is logged before responding.", variant: "destructive" });
-      return;
-    }
-
-    setIsProcessingUserResponse(true);
+    setIsProcessingUserResponse(true); // Using this state for AI processing spinner
     setCurrentSuggestion(null);
     try {
+      // User response is empty here as we're reacting to interviewer's question
       const aiOutput: SuggestAnswersOutput = await suggestAnswers({
-        interviewerQuestion: lastQuestion,
-        userResponse: responseText,
+        interviewerQuestion: questionText,
+        userResponse: "", 
       });
       const suggestion: AISuggestion = {
         suggestion: aiOutput.suggestedAnswer,
         improvementAreas: aiOutput.improvements,
       };
       setCurrentSuggestion(suggestion);
-      addMessageToTranscript('ai', `Suggestion: ${suggestion.suggestion}\nImprovements: ${suggestion.improvementAreas}`);
-      toast({ title: "AI Suggestion Ready", description: "Check the suggestions pane.", variant: "default" });
+      // AI suggestions are not directly added to transcript to avoid clutter, they appear in SuggestionCard
+      toast({ title: "AI Suggestion Ready", description: "Check the AI Coach panel.", variant: "default" });
     } catch (error) {
-      console.error("Error getting AI suggestion:", error);
+      console.error("Error getting AI suggestion for interviewer question:", error);
       toast({ title: "AI Error", description: "Could not get AI suggestion.", variant: "destructive" });
     } finally {
       setIsProcessingUserResponse(false);
     }
   };
-  
+
+  // Effect to trigger AI when interviewer's final transcript segment is stable (after a pause)
+  useEffect(() => {
+    if (interviewerTranscriber.finalTranscriptSegment && interviewerTranscriber.finalTranscriptSegment.trim()) {
+      if (aiTriggerTimeoutRef.current) {
+        clearTimeout(aiTriggerTimeoutRef.current);
+      }
+      // Store segment locally because the ref might clear it before timeout fires
+      const segmentToProcess = interviewerTranscriber.finalTranscriptSegment; 
+      aiTriggerTimeoutRef.current = setTimeout(() => {
+        if (segmentToProcess) { 
+          triggerAISuggestionForInterviewerQuestion(segmentToProcess);
+        }
+        // Resetting the segment is now handled by the hook or explicitly after processing,
+        // to ensure it's available for the timeout.
+        // interviewerTranscriber.resetFinalTranscriptSegment(); // Moved or ensure it's safe
+      }, AI_TRIGGER_PAUSE_DURATION_MS);
+    }
+    return () => {
+      if (aiTriggerTimeoutRef.current) {
+        clearTimeout(aiTriggerTimeoutRef.current);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interviewerTranscriber.finalTranscriptSegment]); // Dependency: only the segment itself
+
+
   // For User's Response (Microphone)
   const handleStartUserRecording = async () => {
     setUserResponseText(''); 
@@ -93,7 +133,7 @@ export function LiveMode() {
   };
 
   const handleStopUserRecordingAndProcess = async () => {
-    userResponseRecorder.stopRecording();
+    userResponseRecorder.stopRecording(); // Transcription and processing will be triggered by useEffect
   };
   
   useEffect(() => {
@@ -106,19 +146,35 @@ export function LiveMode() {
   const transcribeAndProcessUserAudio = async (blob: Blob) => {
     setIsProcessingUserResponse(true);
     try {
-      // Use userResponseRecorder.mediaStream for the mock function if available
       const streamForMock = userResponseRecorder.mediaStream;
-      if (!streamForMock && process.env.NODE_ENV === 'development') { // Mock specific logic
-         console.warn("User media stream not available for mock transcription. Using blob directly (conceptual).");
-      }
-      const recognitionResult: SpeechRecognitionResult = streamForMock ? await transcribeAudio(streamForMock) : {text: "Mocked User Response from Blob", confidence: 0.9};
+      const recognitionResult: SpeechRecognitionResult = streamForMock 
+        ? await transcribeAudio(streamForMock) 
+        : {text: "Mocked User Response from Blob", confidence: 0.9}; // Fallback for non-stream mock
 
       const transcribedText = recognitionResult.text;
       addMessageToTranscript('user', transcribedText);
-      await processUserResponse(transcribedText);
+      
+      // Get AI feedback on the user's response to the last interviewer question
+      const lastQuestion = lastProcessedQuestionRef.current;
+      if (lastQuestion) {
+        const aiFeedback: SuggestAnswersOutput = await suggestAnswers({
+          interviewerQuestion: lastQuestion,
+          userResponse: transcribedText,
+        });
+        const feedbackSuggestion: AISuggestion = {
+          suggestion: aiFeedback.suggestedAnswer,
+          improvementAreas: aiFeedback.improvements,
+        };
+        setCurrentSuggestion(feedbackSuggestion); // Update suggestion card with feedback on user's answer
+        // Optionally add AI feedback to transcript if desired, e.g., addMessageToTranscript('ai', `Feedback on your answer: ...`);
+        toast({ title: "Feedback on Your Answer", description: "AI Coach updated.", variant: "default" });
+      } else {
+         toast({ title: "User Response Logged", description: "No prior interviewer question for full AI feedback context.", variant: "default" });
+      }
+
     } catch (error) {
       console.error("Error transcribing/processing user audio:", error);
-      toast({ title: "User Transcription Error", description: "Failed to transcribe your audio.", variant: "destructive" });
+      toast({ title: "User Transcription Error", description: "Failed to process your audio.", variant: "destructive" });
     } finally {
       setIsProcessingUserResponse(false);
       userResponseRecorder.resetRecording();
@@ -130,53 +186,34 @@ export function LiveMode() {
       toast({ title: "Empty Response", description: "Please type your response.", variant: "destructive" });
       return;
     }
+    const lastQuestion = lastProcessedQuestionRef.current;
+    if (!lastQuestion) {
+      toast({ title: "No Interviewer Question", description: "Please log or wait for an interviewer question first.", variant: "destructive" });
+      return;
+    }
     addMessageToTranscript('user', userResponseText);
-    await processUserResponse(userResponseText);
+    
+    setIsProcessingUserResponse(true);
+    try {
+      const aiFeedback: SuggestAnswersOutput = await suggestAnswers({
+        interviewerQuestion: lastQuestion,
+        userResponse: userResponseText,
+      });
+      const feedbackSuggestion: AISuggestion = {
+        suggestion: aiFeedback.suggestedAnswer,
+        improvementAreas: aiFeedback.improvements,
+      };
+      setCurrentSuggestion(feedbackSuggestion);
+      toast({ title: "Feedback on Your Typed Answer", description: "AI Coach updated.", variant: "default" });
+    } catch (error) {
+        console.error("Error getting AI feedback for typed response:", error);
+        toast({ title: "AI Error", description: "Could not get feedback for your response.", variant: "destructive" });
+    } finally {
+        setIsProcessingUserResponse(false);
+    }
     setUserResponseText('');
   };
 
-  // For Interviewer's Audio (Screen Share)
-  const handleStartInterviewerScreenAudio = async () => {
-    await interviewerAudioRecorder.startRecording({ sourceType: 'display' });
-  };
-
-  const handleStopInterviewerScreenAudio = () => {
-    interviewerAudioRecorder.stopRecording();
-    // Transcription will be triggered by useEffect watching interviewerAudioRecorder.status
-  };
-  
-  const handleResetInterviewerScreenAudio = () => {
-    interviewerAudioRecorder.resetRecording(); // This also stops tracks and screen share
-  };
-
-  useEffect(() => {
-    if (interviewerAudioRecorder.status === 'stopped' && interviewerAudioRecorder.audioBlob) {
-      transcribeInterviewerAudio(interviewerAudioRecorder.audioBlob);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interviewerAudioRecorder.status, interviewerAudioRecorder.audioBlob]);
-
-  const transcribeInterviewerAudio = async (blob: Blob) => {
-    setIsProcessingInterviewerAudio(true);
-    try {
-       // Use interviewerAudioRecorder.mediaStream for the mock function if available
-      const streamForMock = interviewerAudioRecorder.mediaStream;
-      if (!streamForMock && process.env.NODE_ENV === 'development') {
-        console.warn("Interviewer media stream not available for mock transcription. Using blob directly (conceptual).");
-      }
-      const recognitionResult: SpeechRecognitionResult = streamForMock ? await transcribeAudio(streamForMock) : {text: "Mocked Interviewer Question from Blob", confidence: 0.9};
-
-      const transcribedText = recognitionResult.text;
-      addMessageToTranscript('interviewer', transcribedText);
-      toast({ title: "Interviewer Question Logged", description: "Question captured from screen audio.", variant: "default" });
-    } catch (error) {
-      console.error("Error transcribing interviewer audio:", error);
-      toast({ title: "Interviewer Transcription Error", description: "Failed to transcribe interviewer audio.", variant: "destructive" });
-    } finally {
-      setIsProcessingInterviewerAudio(false);
-      interviewerAudioRecorder.resetRecording(); // Also stops the screen share stream implicitly
-    }
-  };
 
   const handleEndSessionAndSummarize = async () => {
     if (transcript.length === 0) {
@@ -185,6 +222,9 @@ export function LiveMode() {
     }
     setIsSummarizing(true);
     setSessionSummary(null);
+    if (interviewerTranscriber.isListening) interviewerTranscriber.stopListening();
+    if (userResponseRecorder.status === 'recording') userResponseRecorder.stopRecording();
+
     try {
       const fullTranscriptText = transcript.map(item => `${item.speaker}: ${item.text}`).join('\n');
       const summaryResult = await summarizeInterview({ transcript: fullTranscriptText });
@@ -223,21 +263,17 @@ export function LiveMode() {
     setCurrentSuggestion(null);
     setSessionSummary(null);
     userResponseRecorder.resetRecording();
-    interviewerAudioRecorder.resetRecording();
+    interviewerTranscriber.stopListening();
+    interviewerTranscriber.resetFinalTranscriptSegment();
     lastProcessedQuestionRef.current = null;
+    if (aiTriggerTimeoutRef.current) clearTimeout(aiTriggerTimeoutRef.current);
     toast({ title: "Session Reset", description: "Live mode has been reset.", icon: <RotateCcw className="h-5 w-5" /> });
   };
 
-  const anyRecordingActive = userResponseRecorder.status === 'recording' || interviewerAudioRecorder.status === 'recording';
-  const anyProcessingActive = isProcessingUserResponse || isProcessingInterviewerAudio || isSummarizing;
+  const anyNonManualInterviewerActivity = interviewerInputMethod === 'screenAudio' && interviewerTranscriber.isListening;
+  const anyUserRecordingActive = userResponseRecorder.status === 'recording';
+  const generalProcessingActive = isProcessingUserResponse || isSummarizing;
 
-  const interviewerAudioLabels = {
-    start: 'Start Listening (Screen)',
-    recording: 'Listening to Screen',
-    stop: 'Stop Listening',
-    reset: 'Reset Screen Audio',
-    processingAi: 'Processing Interviewer Audio...'
-  };
 
   const userResponseAudioLabels = {
     start: 'Start Recording (Mic)',
@@ -246,7 +282,6 @@ export function LiveMode() {
     reset: 'Reset Mic Audio',
     processingAi: 'Processing Your Response...'
   };
-
 
   return (
     <Card className="w-full shadow-xl">
@@ -273,15 +308,14 @@ export function LiveMode() {
             <CardContent className="space-y-3">
               <RadioGroup 
                 defaultValue="manual" 
-                onValueChange={(value: InterviewerInputMethod) => {
-                  setInterviewerInputMethod(value);
-                  if (value === 'manual' && interviewerAudioRecorder.status === 'recording') {
-                    interviewerAudioRecorder.stopRecording(); 
-                    interviewerAudioRecorder.resetRecording();
-                  }
+                onValueChange={(value: string) => {
+                  setInterviewerInputMethod(value as InterviewerInputMethod);
+                   if (interviewerTranscriber.isListening) {
+                    interviewerTranscriber.stopListening();
+                   }
                 }}
                 className="flex space-x-4 mb-3"
-                disabled={anyRecordingActive || anyProcessingActive}
+                disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive}
               >
                 <div className="flex items-center space-x-2">
                   <RadioGroupItem value="manual" id="manual-input" />
@@ -289,7 +323,7 @@ export function LiveMode() {
                 </div>
                 <div className="flex items-center space-x-2">
                   <RadioGroupItem value="screenAudio" id="screen-audio-input" />
-                  <Label htmlFor="screen-audio-input">Screen/System Audio</Label>
+                  <Label htmlFor="screen-audio-input">Live Mic/Screen Audio</Label>
                 </div>
               </RadioGroup>
 
@@ -301,14 +335,14 @@ export function LiveMode() {
                     onChange={(e) => setInterviewerQuestionManual(e.target.value)}
                     rows={3}
                     className="text-base"
-                    disabled={anyRecordingActive || anyProcessingActive}
+                    disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive}
                   />
                   <Button 
                     onClick={handleManualInterviewerQuestionSubmit} 
                     className="w-full" 
-                    disabled={anyRecordingActive || anyProcessingActive || !interviewerQuestionManual.trim()}
+                    disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive || !interviewerQuestionManual.trim()}
                   >
-                    <Send className="w-4 h-4 mr-2" /> Log Question
+                    <Send className="w-4 h-4 mr-2" /> Log Question & Get Suggestion
                   </Button>
                 </div>
               )}
@@ -317,24 +351,51 @@ export function LiveMode() {
                 <div className="space-y-2">
                    <Alert variant="default" className="bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-700">
                     <Info className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                    <AlertTitle className="text-blue-700 dark:text-blue-300">Screen Audio Capture</AlertTitle>
+                    <AlertTitle className="text-blue-700 dark:text-blue-300">Live Audio Capture (Interviewer)</AlertTitle>
                     <AlertDescription className="text-blue-600 dark:text-blue-500 text-xs">
-                      This will attempt to capture audio from a screen, window, or browser tab you select.
-                      Ensure you choose an option that includes audio sharing (e.g., "Share tab audio" in Chrome).
-                      The video part of the screen share is not recorded or used.
+                     Start listening to capture interviewer's audio via microphone or screen share.
+                     The system will transcribe automatically and provide suggestions after pauses. Ensure audio sharing for screen capture.
+                     <br />
+                     <span className="font-semibold">Note:</span> Web Speech API for screen audio relies on browser/system capabilities. Microphone input is generally more reliable for direct capture.
                     </AlertDescription>
                   </Alert>
-                  <AudioControls
-                    status={interviewerAudioRecorder.status}
-                    onStart={handleStartInterviewerScreenAudio}
-                    onStop={handleStopInterviewerScreenAudio}
-                    onReset={handleResetInterviewerScreenAudio}
-                    error={interviewerAudioRecorder.error}
-                    disabled={anyRecordingActive || anyProcessingActive || interviewerAudioRecorder.status === 'recording'}
-                    isProcessingAi={isProcessingInterviewerAudio}
-                    sourceType="display"
-                    labels={interviewerAudioLabels}
-                  />
+                  {!interviewerTranscriber.isListening ? (
+                    <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
+                        <Button 
+                            onClick={() => interviewerTranscriber.startListening('microphone')} 
+                            className="w-full group transition-all hover:bg-green-500/10 hover:border-green-500 hover:text-green-600"
+                            variant="outline"
+                            disabled={anyUserRecordingActive || generalProcessingActive || interviewerTranscriber.isListening}
+                        >
+                            <Mic className="w-5 h-5 mr-2 text-green-600 group-hover:text-green-500" /> Start Listening (Mic)
+                        </Button>
+                        <Button 
+                            onClick={() => interviewerTranscriber.startListening('display')} 
+                            className="w-full group transition-all hover:bg-green-500/10 hover:border-green-500 hover:text-green-600"
+                            variant="outline"
+                            disabled={anyUserRecordingActive || generalProcessingActive || interviewerTranscriber.isListening}
+                        >
+                            <MonitorPlay className="w-5 h-5 mr-2 text-green-600 group-hover:text-green-500" /> Start Listening (Screen)
+                        </Button>
+                    </div>
+                  ) : (
+                    <Button 
+                        onClick={interviewerTranscriber.stopListening} 
+                        className="w-full" 
+                        variant="destructive" 
+                        disabled={generalProcessingActive && !interviewerTranscriber.isListening}
+                    >
+                      <StopCircleLucide className="w-5 h-5 mr-2" /> Stop Listening to Interviewer
+                    </Button>
+                  )}
+                  {interviewerTranscriber.isListening && (
+                    <div className="text-sm text-primary flex items-center p-2 bg-primary/5 rounded-md">
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <span>Listening for interviewer... </span>
+                        {interviewerTranscriber.interimTranscript && <span className="ml-1 italic text-muted-foreground">"{interviewerTranscriber.interimTranscript}"</span>}
+                    </div>
+                  )}
+                  {interviewerTranscriber.error && <p className="text-sm text-destructive mt-1 p-2 bg-destructive/10 rounded-md">{interviewerTranscriber.error}</p>}
                 </div>
               )}
             </CardContent>
@@ -351,8 +412,8 @@ export function LiveMode() {
                     onStop={handleStopUserRecordingAndProcess}
                     onReset={userResponseRecorder.resetRecording}
                     error={userResponseRecorder.error}
-                    disabled={anyRecordingActive || anyProcessingActive || userResponseRecorder.status === 'recording'}
-                    isProcessingAi={isProcessingUserResponse}
+                    disabled={anyNonManualInterviewerActivity || generalProcessingActive || anyUserRecordingActive}
+                    isProcessingAi={isProcessingUserResponse && userResponseRecorder.status !== 'recording'} // Only show AI processing for user response if not actively recording
                     sourceType="microphone"
                     labels={userResponseAudioLabels}
                  />
@@ -367,14 +428,14 @@ export function LiveMode() {
                     onChange={(e) => setUserResponseText(e.target.value)}
                     rows={3}
                     className="text-base"
-                    disabled={anyRecordingActive || anyProcessingActive}
+                    disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive}
                 />
                 <Button 
                   onClick={handleUserTextResponseSubmit} 
                   className="w-full" 
-                  disabled={anyRecordingActive || anyProcessingActive || !userResponseText.trim()}
+                  disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive || !userResponseText.trim()}
                 >
-                    <Bot className="w-4 h-4 mr-2" /> Process Typed Response
+                    <Bot className="w-4 h-4 mr-2" /> Process Typed Response & Get Feedback
                 </Button>
              </CardContent>
           </Card>
@@ -382,7 +443,11 @@ export function LiveMode() {
 
         {/* Right Pane: AI Suggestions */}
         <div className="space-y-6">
-          <SuggestionCard suggestion={currentSuggestion} isLoading={isProcessingUserResponse} title="Real-time AI Coach" />
+          <SuggestionCard 
+            suggestion={currentSuggestion} 
+            isLoading={isProcessingUserResponse && !anyUserRecordingActive && interviewerInputMethod === 'manual' ? false : isProcessingUserResponse } // More nuanced loading state for suggestion card
+            title="Real-time AI Coach" 
+          />
           
           {isSummarizing && <div className="text-center p-4"><MessageCircle className="w-6 h-6 mx-auto mb-2 animate-pulse text-primary" />Generating session summary...</div>}
           {sessionSummary && !isSummarizing && (
@@ -393,11 +458,11 @@ export function LiveMode() {
               <CardContent className="space-y-3">
                 <div>
                   <h4 className="font-semibold text-md">Summary:</h4>
-                  <p className="text-sm p-2 bg-background/70 rounded border">{sessionSummary.summary}</p>
+                  <p className="text-sm p-2 bg-background/70 rounded border whitespace-pre-wrap">{sessionSummary.summary}</p>
                 </div>
                 <div>
                   <h4 className="font-semibold text-md">Overall Feedback:</h4>
-                  <p className="text-sm p-2 bg-background/70 rounded border">{sessionSummary.areasForImprovement}</p>
+                  <p className="text-sm p-2 bg-background/70 rounded border whitespace-pre-wrap">{sessionSummary.areasForImprovement}</p>
                 </div>
               </CardContent>
             </Card>
@@ -408,13 +473,27 @@ export function LiveMode() {
                 <CardTitle className="text-lg">Session Controls</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-                <Button onClick={handleEndSessionAndSummarize} variant="outline" className="w-full" disabled={anyRecordingActive || anyProcessingActive || transcript.length === 0}>
+                <Button 
+                    onClick={handleEndSessionAndSummarize} 
+                    variant="outline" 
+                    className="w-full" 
+                    disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive || transcript.length === 0}
+                >
                     <MessageCircle className="w-4 h-4 mr-2" /> End & Summarize Session
                 </Button>
-                <Button onClick={handleSaveSession} className="w-full" disabled={anyRecordingActive || anyProcessingActive || transcript.length === 0}>
+                <Button 
+                    onClick={handleSaveSession} 
+                    className="w-full" 
+                    disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive || transcript.length === 0}
+                >
                     <Save className="w-4 h-4 mr-2" /> Save Session
                 </Button>
-                <Button onClick={handleResetSession} variant="destructive" className="w-full" disabled={anyRecordingActive || anyProcessingActive}>
+                <Button 
+                    onClick={handleResetSession} 
+                    variant="destructive" 
+                    className="w-full" 
+                    disabled={anyNonManualInterviewerActivity || anyUserRecordingActive || generalProcessingActive}
+                >
                     <RotateCcw className="w-4 h-4 mr-2" /> Reset Session
                 </Button>
             </CardContent>
