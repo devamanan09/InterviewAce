@@ -14,6 +14,7 @@ export interface UseLiveInterviewerTranscriberResult {
   interimTranscript: string;
   finalTranscriptSegment: string | null; 
   resetFinalTranscriptSegment: () => void;
+  sourceType: AudioSourceType | null; // Added to track the current source
 }
 
 export function useLiveInterviewerTranscriber(
@@ -23,6 +24,8 @@ export function useLiveInterviewerTranscriber(
   const [error, setError] = useState<string | null>(null);
   const [interimTranscript, setInterimTranscript] = useState<string>('');
   const [finalTranscriptSegment, setFinalTranscriptSegment] = useState<string | null>(null);
+  const [currentSourceType, setCurrentSourceType] = useState<AudioSourceType | null>(null);
+
 
   const transcriberRef = useRef<LiveTranscriber | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -38,7 +41,7 @@ export function useLiveInterviewerTranscriber(
 
     if (isFinal) {
       setInterimTranscript(''); 
-      if(text.trim()){ // only process if there's actual text
+      if(text.trim()){ 
         setFinalTranscriptSegment(text); 
         onFinalSegmentCallback(text); 
       }
@@ -51,13 +54,12 @@ export function useLiveInterviewerTranscriber(
     let message = 'Transcription error';
     if (err instanceof Error) {
         message = err.message;
-    } else if ('error' in err) { // SpeechRecognitionErrorEvent
+    } else if ('error' in err) { 
         message = `Transcription error: ${err.error}`;
         if (err.error === 'no-speech') {
             message = "No speech detected. Listening will continue if active.";
-            // Don't necessarily stop listening or show a breaking error for no-speech if continuous
-            setError(message); // Informative error
-            return; // Potentially keep listening
+            setError(message); 
+            return; 
         } else if (err.error === 'audio-capture') {
             message = "Audio capture failed. Please check microphone/audio source permissions.";
         } else if (err.error === 'not-allowed') {
@@ -65,8 +67,7 @@ export function useLiveInterviewerTranscriber(
         }
     }
     setError(message);
-    setIsListening(false); // Stop listening on critical errors
-    // console.error(message, err);
+    setIsListening(false); 
   }, []);
   
   const cleanupStreams = useCallback(() => {
@@ -84,11 +85,13 @@ export function useLiveInterviewerTranscriber(
     setError(null);
     setInterimTranscript('');
     setFinalTranscriptSegment(null);
+    setCurrentSourceType(sourceType);
+
 
     if (isListening) return;
 
     try {
-      let streamToUse: MediaStream | undefined; // Undefined initially
+      let streamToUse: MediaStream | undefined; 
       if (sourceType === 'display') {
         const displayStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
         originalDisplayStreamRef.current = displayStream;
@@ -99,31 +102,22 @@ export function useLiveInterviewerTranscriber(
         streamToUse = new MediaStream(audioTracks); 
         displayStream.getVideoTracks().forEach(track => track.stop());
         mediaStreamRef.current = streamToUse;
-      } else { // 'microphone'
-        // For microphone, Web Speech API usually picks default. We still get the stream to ensure permission is granted.
+      } else { 
         streamToUse = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaStreamRef.current = streamToUse; // Store it for cleanup
+        mediaStreamRef.current = streamToUse; 
       }
       
-      // Initialize LiveTranscriber if it doesn't exist or re-initialize
       transcriberRef.current = new LiveTranscriber({
         onResult: handleTranscriptionResult,
         onError: handleTranscriptionError,
         onEnd: () => {
-          // This onEnd might be called by the browser if speech stops for too long.
-          // If `isListening` is still true, it implies an unexpected stop.
           if (isListening) {
-            // console.log("Transcriber ended, but hook still active. May need manual restart or could be end of utterance.");
-            // Potentially, we could try to restart it here if that's the desired behavior for continuous listening.
-            // For now, we let it end and the user can restart if needed.
-            // setIsListening(false); // Or let stopListening handle this
+            // No specific action on auto-end if still 'listening', user might restart.
           }
         }
       });
       
-      // The `streamToUse` is primarily for getting permissions and for potential future use if Web Speech API changes.
-      // The LiveTranscriber internally uses the default mechanism of SpeechRecognition API.
-      transcriberRef.current.start(streamToUse); // Pass the stream, even if conceptually used by LiveTranscriber
+      transcriberRef.current.start(streamToUse); 
       setIsListening(true);
       toast({ title: `Listening for Interviewer (${sourceType})`, description: "Live transcription started.", variant: "default" });
 
@@ -138,6 +132,7 @@ export function useLiveInterviewerTranscriber(
       }
       setError(userFriendlyMessage);
       setIsListening(false);
+      setCurrentSourceType(null);
       cleanupStreams();
     }
   }, [isListening, handleTranscriptionResult, handleTranscriptionError, cleanupStreams, toast]);
@@ -146,8 +141,9 @@ export function useLiveInterviewerTranscriber(
     if (transcriberRef.current?.getIsActive()) {
       transcriberRef.current.stop();
     }
-    cleanupStreams(); // Important to release camera/mic/screen
+    cleanupStreams(); 
     setIsListening(false);
+    setCurrentSourceType(null);
     setInterimTranscript('');
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
@@ -171,5 +167,7 @@ export function useLiveInterviewerTranscriber(
     };
   }, [cleanupStreams]);
 
-  return { startListening, stopListening, isListening, error, interimTranscript, finalTranscriptSegment, resetFinalTranscriptSegment };
+  return { startListening, stopListening, isListening, error, interimTranscript, finalTranscriptSegment, resetFinalTranscriptSegment, sourceType: currentSourceType };
 }
+
+    
