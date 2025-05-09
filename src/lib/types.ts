@@ -24,7 +24,8 @@ export interface StoredInterviewSession {
   mode: 'practice' | 'live';
   date: string; // ISO string
   roleDescription?: string; // For practice mode
-  transcript: TranscriptItem[];
+  transcript: TranscriptItem[]; // Main conversation log
+  userSpokenResponses?: TranscriptItem[]; // For live mode, automatically recorded user speech
   summary?: string; // AI summary of the session
   overallFeedback?: string; // AI feedback
 }

@@ -8,7 +8,7 @@ import { ChatLog } from './chat-log';
 import type { StoredInterviewSession } from '@/lib/types';
 import { getSessionsFromLocalStorage, deleteSessionFromLocalStorage } from '@/lib/local-storage';
 import { useToast } from '@/hooks/use-toast';
-import { History, Trash2, FileText, Brain } from 'lucide-react';
+import { History, Trash2, FileText, Brain, UserVoice } from 'lucide-react'; // Assuming UserVoice or similar icon
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +21,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from '@/components/ui/badge';
+
+// Placeholder for UserVoice if not in lucide-react, replace with a suitable one or SVG
+const UserVoiceIcon = UserCheck; // Using UserCheck as a placeholder
 
 export function ReviewMode() {
   const [sessions, setSessions] = useState<StoredInterviewSession[]>([]);
@@ -138,15 +141,26 @@ export function ReviewMode() {
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              <Accordion type="multiple" defaultValue={['transcript', 'summary']} className="w-full">
+              <Accordion type="multiple" defaultValue={['transcript', 'summary', 'userResponses']} className="w-full">
                 <AccordionItem value="transcript">
                   <AccordionTrigger className="text-lg font-semibold hover:no-underline">
-                    <FileText className="w-5 h-5 mr-2 text-primary"/> Full Transcript
+                    <FileText className="w-5 h-5 mr-2 text-primary"/> Main Conversation Transcript
                   </AccordionTrigger>
                   <AccordionContent>
-                    <ChatLog messages={selectedSession.transcript} height="400px" />
+                    <ChatLog messages={selectedSession.transcript} height="300px" />
                   </AccordionContent>
                 </AccordionItem>
+
+                {selectedSession.userSpokenResponses && selectedSession.userSpokenResponses.length > 0 && (
+                  <AccordionItem value="userResponses">
+                    <AccordionTrigger className="text-lg font-semibold hover:no-underline">
+                      <UserVoiceIcon className="w-5 h-5 mr-2 text-secondary-foreground"/> Your Spoken Responses (Auto-Recorded)
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <ChatLog messages={selectedSession.userSpokenResponses} height="200px" />
+                    </AccordionContent>
+                  </AccordionItem>
+                )}
                 
                 {(selectedSession.summary || selectedSession.overallFeedback) && (
                   <AccordionItem value="summary">
